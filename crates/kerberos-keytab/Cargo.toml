@@ -1,0 +1,13 @@
+[package]
+name = "kerberos-keytab"
+version = "0.4.1"
+edition = "2024"
+description = "Kerberos keytab format library"
+license = "AGPL-3.0"
+
+[dependencies]
+kerberos-constants = { path = "../kerberos-constants" }
+nom = "=7.1.3"
+
+[dev-dependencies]
+kerberos-constants = { path = "../kerberos-constants" }

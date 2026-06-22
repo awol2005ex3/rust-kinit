@@ -1,0 +1,12 @@
+[package]
+name = "kerberos-asn1"
+version = "0.4.2"
+edition = "2024"
+description = "Kerberos ASN.1 types"
+license = "AGPL-3.0"
+
+[dependencies]
+chrono = "=0.4.39"
+kerberos-constants = { path = "../kerberos-constants" }
+red-asn1 = { path = "../red-asn1" }
+red-asn1-derive = { path = "../red-asn1-derive" }

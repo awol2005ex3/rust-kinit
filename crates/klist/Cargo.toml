@@ -1,0 +1,13 @@
+[package]
+name = "klist"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "klist"
+path = "src/main.rs"
+
+[dependencies]
+kerberos-ccache = { path = "../kerberos-ccache" }
+kerberos-constants = { path = "../kerberos-constants" }
+chrono = "=0.4.39"

@@ -1,0 +1,24 @@
+[package]
+name = "kinit-kt"
+version = "0.1.0"
+edition = "2021"
+description = "Rust kinit -kt implementation"
+
+[lib]
+name = "kinit_kt"
+path = "src/lib.rs"
+
+[[bin]]
+name = "kinit"
+path = "src/main.rs"
+
+[dependencies]
+ascii = "=1.1.0"
+chrono = "=0.4.39"
+kerberos-asn1 = { path = "../kerberos-asn1" }
+kerbeiros = { path = "../kerbeiros" }
+kerberos-ccache = { path = "../kerberos-ccache" }
+kerberos-constants = { path = "../kerberos-constants" }
+kerberos-crypto = { path = "../kerberos-crypto" }
+kerberos-keytab = { path = "../kerberos-keytab" }
+mit-krb5-ccache = { path = "../mit-krb5-ccache" }

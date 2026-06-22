@@ -1,0 +1,15 @@
+[workspace]
+members = [
+    "crates/kinit-kt",
+    "crates/klist",
+    "crates/kerbeiros",
+    "crates/kerberos-asn1",
+    "crates/kerberos-ccache",
+    "crates/kerberos-constants",
+    "crates/kerberos-crypto",
+    "crates/kerberos-keytab",
+    "crates/mit-krb5-ccache",
+    "crates/red-asn1",
+    "crates/red-asn1-derive",
+]
+resolver = "2"

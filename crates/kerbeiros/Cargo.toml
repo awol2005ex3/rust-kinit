@@ -1,0 +1,21 @@
+[package]
+name = "kerbeiros"
+version = "0.4.1"
+edition = "2024"
+description = "Kerberos client library (with MS-KDC bug fixes)"
+license = "AGPL-3.0"
+
+[dependencies]
+ascii = "=1.1.0"
+chrono = "=0.4.39"
+dns-lookup = "=2.1.1"
+getset = "=0.1.7"
+kerberos-asn1 = { path = "../kerberos-asn1" }
+kerberos-ccache = { path = "../kerberos-ccache" }
+kerberos-constants = { path = "../kerberos-constants" }
+kerberos-crypto = { path = "../kerberos-crypto" }
+rand = "=0.8.6"
+thiserror = "=1.0.69"
+
+[lints.clippy]
+needless_return = "allow"

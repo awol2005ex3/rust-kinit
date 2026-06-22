@@ -1,0 +1,17 @@
+[package]
+name = "red-asn1-derive"
+version = "0.2.3"
+edition = "2024"
+description = "Derive macros for red-asn1 ASN.1 library"
+license = "AGPL-3.0"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "=0.4.30"
+quote = "=0.6.13"
+syn = { version = "=0.15.44", features = ["full"] }
+
+[dev-dependencies]
+red-asn1 = { path = "../red-asn1" }
