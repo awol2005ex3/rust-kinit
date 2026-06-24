@@ -1,9 +1,10 @@
 [package]
-name = "mit-krb5-ccache"
+name = "awol2005ex3-mit-krb5-ccache"
 version = "0.1.0"
-edition = "2021"
+edition.workspace = true
 description = "Correct MIT krb5 FCC v4 ccache format writer"
-license = "MIT"
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
 nom = "8"

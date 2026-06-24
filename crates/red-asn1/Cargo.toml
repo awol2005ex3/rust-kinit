@@ -1,15 +1,16 @@
 [package]
-name = "red-asn1"
+name = "awol2005ex3-red-asn1"
 version = "0.3.7"
-edition = "2024"
+edition.workspace = true
 description = "ASN.1 library for Kerberos protocol"
-license = "AGPL-3.0"
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
 ascii = "=1.1.0"
 chrono = "=0.4.39"
 nom = "=8.0.0"
-red-asn1-derive = { path = "../red-asn1-derive" }
+red-asn1-derive = { path = "../red-asn1-derive", package = "awol2005ex3-red-asn1-derive" }
 
 [dev-dependencies]
-red-asn1-derive = { path = "../red-asn1-derive" }
+red-asn1-derive = { path = "../red-asn1-derive", package = "awol2005ex3-red-asn1-derive" }

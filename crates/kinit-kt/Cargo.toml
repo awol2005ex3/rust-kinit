@@ -1,8 +1,10 @@
 [package]
-name = "kinit-kt"
+name = "awol2005ex3-kinit-kt"
 version = "0.1.0"
-edition = "2021"
+edition.workspace = true
 description = "Rust kinit -kt implementation"
+license.workspace = true
+repository.workspace = true
 
 [lib]
 name = "kinit_kt"
@@ -15,10 +17,10 @@ path = "src/main.rs"
 [dependencies]
 ascii = "=1.1.0"
 chrono = "=0.4.39"
-kerberos-asn1 = { path = "../kerberos-asn1" }
-kerbeiros = { path = "../kerbeiros" }
-kerberos-ccache = { path = "../kerberos-ccache" }
-kerberos-constants = { path = "../kerberos-constants" }
-kerberos-crypto = { path = "../kerberos-crypto" }
-kerberos-keytab = { path = "../kerberos-keytab" }
-mit-krb5-ccache = { path = "../mit-krb5-ccache" }
+kerberos-asn1 = { path = "../kerberos-asn1", package = "awol2005ex3-kerberos-asn1" }
+kerbeiros = { path = "../kerbeiros", package = "awol2005ex3-kerbeiros" }
+kerberos-ccache = { path = "../kerberos-ccache", package = "awol2005ex3-kerberos-ccache" }
+kerberos-constants = { path = "../kerberos-constants", package = "awol2005ex3-kerberos-constants" }
+kerberos-crypto = { path = "../kerberos-crypto", package = "awol2005ex3-kerberos-crypto" }
+kerberos-keytab = { path = "../kerberos-keytab", package = "awol2005ex3-kerberos-keytab" }
+mit-krb5-ccache = { path = "../mit-krb5-ccache", package = "awol2005ex3-mit-krb5-ccache" }

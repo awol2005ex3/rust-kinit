@@ -13,3 +13,8 @@ members = [
     "crates/red-asn1-derive",
 ]
 resolver = "2"
+
+[workspace.package]
+license = "AGPL-3.0"
+edition = "2024"
+repository = "https://gitee.com/awol2010ex/rust-kinit"

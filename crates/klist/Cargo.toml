@@ -1,13 +1,15 @@
 [package]
-name = "klist"
+name = "awol2005ex3-klist"
 version = "0.1.0"
-edition = "2021"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [[bin]]
 name = "klist"
 path = "src/main.rs"
 
 [dependencies]
-kerberos-ccache = { path = "../kerberos-ccache" }
-kerberos-constants = { path = "../kerberos-constants" }
+kerberos-ccache = { path = "../kerberos-ccache", package = "awol2005ex3-kerberos-ccache" }
+kerberos-constants = { path = "../kerberos-constants", package = "awol2005ex3-kerberos-constants" }
 chrono = "=0.4.39"

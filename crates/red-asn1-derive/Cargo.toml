@@ -1,9 +1,10 @@
 [package]
-name = "red-asn1-derive"
+name = "awol2005ex3-red-asn1-derive"
 version = "0.2.3"
-edition = "2024"
+edition.workspace = true
 description = "Derive macros for red-asn1 ASN.1 library"
-license = "AGPL-3.0"
+license.workspace = true
+repository.workspace = true
 
 [lib]
 proc-macro = true
@@ -14,4 +15,4 @@ quote = "=0.6.13"
 syn = { version = "=0.15.44", features = ["full"] }
 
 [dev-dependencies]
-red-asn1 = { path = "../red-asn1" }
+red-asn1 = { path = "../red-asn1", package = "awol2005ex3-red-asn1" }
