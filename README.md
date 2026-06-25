@@ -2,6 +2,10 @@
 
 Rust 实现的 Kerberos `kinit` / `klist` 命令行工具，用于通过 keytab 文件获取 TGT（Ticket Granting Ticket）并管理 Kerberos 凭据缓存（ccache）。
 
+**源码仓库**: <https://gitee.com/awol2010ex/rust-kinit>
+
+**发布包**: [crates.io](https://crates.io) 上以 `awol2005ex3-` 前缀发布（如 `awol2005ex3-kinit-kt`, `awol2005ex3-klist`, `awol2005ex3-kerbeiros` 等）
+
 ## 功能特性
 
 - **kinit**：通过 keytab 文件获取 TGT，兼容 MIT kinit 行为
@@ -9,24 +13,16 @@ Rust 实现的 Kerberos `kinit` / `klist` 命令行工具，用于通过 keytab 
 - 支持 AES256/AES128/RC4 加密类型
 - 兼容微软 KDC 的 APPLICATION tag 扩展
 - ccache 默认路径与 MIT Kerberos for Windows 一致（`%TEMP%\krb5cc_<USERNAME>`）
-- 纯 Rust 实现，无运行时依赖
+- 纯 Rust 实现，无外部运行时依赖
 
 ## 构建
 
 ```bash
-# 克隆仓库
-git clone <repo-url>
+git clone https://gitee.com/awol2010ex/rust-kinit
 cd rust-kinit
 
-# 开发构建
-cargo build
-
-# 发布构建（推荐）
-cargo build --release
-
-# 构建产物位置
-#   D:\cargo-target\release\kinit.exe
-#   D:\cargo-target\release\klist.exe
+cargo build            # 开发构建
+cargo build --release  # 发布构建
 ```
 
 ## 使用方法
@@ -34,14 +30,8 @@ cargo build --release
 ### kinit - 获取 TGT
 
 ```bash
-# 基本用法
 kinit -kt <keytab文件> <principal@REALM>
-
-# 指定输出 ccache 路径
 kinit -kt hdfs.keytab hdfs@XXX.COM -o /tmp/krb5cc
-
-# 示例
-kinit -kt "D:\path\to\hdfs.keytab" hdfs@XXX.COM
 ```
 
 **参数说明：**
@@ -52,17 +42,9 @@ kinit -kt "D:\path\to\hdfs.keytab" hdfs@XXX.COM
 ### klist - 列出 ccache 内容
 
 ```bash
-# 列出默认 ccache（%TEMP%\krb5cc_<USERNAME>）
-klist
-
-# 指定 ccache 路径
-klist -c D:\path\to\krb5cc_hdfs
-
-# 显示加密类型详情
-klist -e
-
-# 组合使用
-klist -e -c D:\path\to\krb5cc_hdfs
+klist                          # 列出默认 ccache
+klist -c D:\path\to\krb5cc     # 指定路径
+klist -e                       # 显示加密类型详情
 ```
 
 **参数说明：**
@@ -90,32 +72,36 @@ Default principal: hdfs@XXX.COM
 
 ```
 rust-kinit/
-├── Cargo.toml              # Workspace 配置
+├── Cargo.toml              # Workspace 配置（含 [workspace.package] 统一配置）
+├── LICENSE                 # AGPL-3.0
+├── publish.ps1             # crates.io 发布脚本
 ├── crates/
-│   ├── kinit-kt/           # kinit 命令行工具
-│   ├── klist/              # klist 命令行工具
-│   ├── kerbeiros/          # Kerberos AS-REQ/AS-REP 实现（已修复）
-│   ├── kerberos-asn1/      # Kerberos ASN.1 类型定义
-│   ├── kerberos-ccache/    # ccache 文件格式读写
-│   ├── kerberos-constants/ # Kerberos 常量定义
-│   ├── kerberos-crypto/    # Kerberos 加密算法实现
-│   ├── kerberos-keytab/    # keytab 文件格式解析
-│   ├── red-asn1/           # ASN.1 DER 编码/解码库
-│   └── red-asn1-derive/    # ASN.1 derive 宏（proc-macro）
+│   ├── kinit-kt/           # kinit 命令行工具（awol2005ex3-kinit-kt）
+│   ├── klist/              # klist 命令行工具（awol2005ex3-klist）
+│   ├── kerbeiros/          # Kerberos AS-REQ/AS-REP 实现（awol2005ex3-kerbeiros）
+│   ├── kerberos-asn1/      # Kerberos ASN.1 类型定义（awol2005ex3-kerberos-asn1）
+│   ├── kerberos-ccache/    # ccache 文件格式读写（awol2005ex3-kerberos-ccache）
+│   ├── kerberos-constants/ # Kerberos 常量定义（awol2005ex3-kerberos-constants）
+│   ├── kerberos-crypto/    # Kerberos 加密算法（awol2005ex3-kerberos-crypto）
+│   ├── kerberos-keytab/    # keytab 文件格式解析（awol2005ex3-kerberos-keytab）
+│   ├── mit-krb5-ccache/    # MIT krb5 FCC v4 ccache 写入（awol2005ex3-mit-krb5-ccache）
+│   ├── red-asn1/           # ASN.1 DER 编码/解码库（awol2005ex3-red-asn1）
+│   └── red-asn1-derive/    # ASN.1 derive 宏（awol2005ex3-red-asn1-derive）
 ```
 
 ## 与 MIT kinit 的兼容性
 
 - 默认 ccache 路径：`%TEMP%\krb5cc_<USERNAME>`（与 MIT Kerberos for Windows 一致）
 - 支持 `KRB5CCNAME` 环境变量（自动 strip `FILE:` / `WRFILE:` 前缀）
-- ccache 文件格式与 MIT Kerberos 完全兼容
+- ccache 文件格式与 MIT Kerberos FCC v4 完全兼容
 
 ## 技术细节
 
-### 修复的上游 Bug
+### 修复的 Bug
 
-1. **etype 使用 KDC 实际值**：原 `himmelblau_kerbeiros` 使用 `key.etypes()[0]` 而非 `kdc_rep.enc_part.etype`，导致解密失败
+1. **etype 使用 KDC 实际值**：原实现使用 `key.etypes()[0]` 而非 `kdc_rep.enc_part.etype`，导致解密失败
 2. **微软 KDC APPLICATION tag 兼容**：微软 KDC 返回的 `EncAsRepPart` 使用 tag `0x7a` 而非标准 `0x79`，已添加兼容处理
+3. **KeyBlock::new() etype 硬编码**：`KeyBlock::new()` 将 `etype` 硬编码为 0，导致 klist 显示 `EType: null`
 
 ### Rust 2024 Edition 兼容修复
 
@@ -125,6 +111,4 @@ rust-kinit/
 
 ## 许可证
 
-本项目采用 [GNU Affero General Public License v3.0 (AGPL-3.0)](https://opensource.org/licenses/AGPL-3.0) 开源协议。
-
-如需与其他许可证合作，请联系维护者。
+[GNU Affero General Public License v3.0 (AGPL-3.0)](LICENSE)
