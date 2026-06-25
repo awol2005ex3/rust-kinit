@@ -10,6 +10,6 @@ name = "klist"
 path = "src/main.rs"
 
 [dependencies]
-kerberos-ccache = { path = "../kerberos-ccache", package = "awol2005ex3-kerberos-ccache" }
-kerberos-constants = { path = "../kerberos-constants", package = "awol2005ex3-kerberos-constants" }
+kerberos-ccache = { path = "../kerberos-ccache", package = "awol2005ex3-kerberos-ccache", version = "0.4.1" }
+kerberos-constants = { path = "../kerberos-constants", package = "awol2005ex3-kerberos-constants", version = "0.4.1" }
 chrono = "=0.4.39"

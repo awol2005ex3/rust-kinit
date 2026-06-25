@@ -10,7 +10,7 @@ repository.workspace = true
 ascii = "=1.1.0"
 chrono = "=0.4.39"
 nom = "=8.0.0"
-red-asn1-derive = { path = "../red-asn1-derive", package = "awol2005ex3-red-asn1-derive" }
+red-asn1-derive = { path = "../red-asn1-derive", package = "awol2005ex3-red-asn1-derive", version = "0.2.3" }
 
 [dev-dependencies]
-red-asn1-derive = { path = "../red-asn1-derive", package = "awol2005ex3-red-asn1-derive" }
+red-asn1-derive = { path = "../red-asn1-derive", package = "awol2005ex3-red-asn1-derive", version = "0.2.3" }

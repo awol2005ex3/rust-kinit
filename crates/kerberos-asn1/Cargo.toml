@@ -8,6 +8,6 @@ repository.workspace = true
 
 [dependencies]
 chrono = "=0.4.39"
-kerberos-constants = { path = "../kerberos-constants", package = "awol2005ex3-kerberos-constants" }
-red-asn1 = { path = "../red-asn1", package = "awol2005ex3-red-asn1" }
-red-asn1-derive = { path = "../red-asn1-derive", package = "awol2005ex3-red-asn1-derive" }
+kerberos-constants = { path = "../kerberos-constants", package = "awol2005ex3-kerberos-constants", version = "0.4.1" }
+red-asn1 = { path = "../red-asn1", package = "awol2005ex3-red-asn1", version = "0.3.7" }
+red-asn1-derive = { path = "../red-asn1-derive", package = "awol2005ex3-red-asn1-derive", version = "0.2.3" }

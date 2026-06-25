@@ -13,7 +13,7 @@ chrono = "=0.4.39"
 digest = "=0.10.7"
 ecb = { version = "=0.1.2", features = ["alloc"] }
 hmac = "=0.12.1"
-kerberos-constants = { path = "../kerberos-constants", package = "awol2005ex3-kerberos-constants" }
+kerberos-constants = { path = "../kerberos-constants", package = "awol2005ex3-kerberos-constants", version = "0.4.1" }
 md-5 = "=0.10.6"
 md4 = "=0.10.2"
 num = "=0.4.3"
