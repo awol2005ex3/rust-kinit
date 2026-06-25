@@ -138,10 +138,23 @@ impl TgsRequester {
         service_principal: &AsciiString,
     ) -> Result<Vec<u8>> {
         // Build KDC-REQ-BODY for TGS-REQ
-        let sname = PrincipalName::new(
+        // Split SPN string into components on '/' and strip '@REALM' suffix
+        let spn_str = service_principal.as_str();
+        // Remove @REALM suffix if present (e.g. "hive/bd-pr-nn1@GHAC.COM" -> "hive/bd-pr-nn1")
+        let spn_clean = spn_str.split('@').next().unwrap_or(spn_str);
+        let parts: Vec<&str> = spn_clean.split('/').collect();
+        
+        if parts.is_empty() {
+            return Err(Error::NotAvailableData("Empty service principal".into()));
+        }
+        
+        let mut sname = PrincipalName::new(
             NT_SRV_INST,
-            service_principal.clone().into(),
+            parts[0].to_string(),
         );
+        for part in &parts[1..] {
+            sname.push((*part).to_string());
+        }
 
         let mut kdc_req_body = kerberos_asn1::KdcReqBody::default();
         kdc_req_body.kdc_options =
