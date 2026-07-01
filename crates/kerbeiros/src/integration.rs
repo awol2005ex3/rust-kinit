@@ -37,6 +37,9 @@ pub struct KerberosAuthOptions {
     pub service_principal: AsciiString,
     /// Whether to request mutual authentication in the AP-REQ.
     pub mutual_required: bool,
+    /// Time offset in seconds to correct clock skew (KDC time - local time).
+    /// Automatically detected from TGT authtime when set to 0.
+    pub time_offset_secs: i64,
 }
 
 impl Default for KerberosAuthOptions {
@@ -50,6 +53,7 @@ impl Default for KerberosAuthOptions {
             user_key: Key::Secret(String::new()),
             service_principal: AsciiString::from_ascii("service/host").unwrap(),
             mutual_required: false,
+            time_offset_secs: 0,
         }
     }
 }
@@ -120,7 +124,14 @@ impl KerberosAuthenticator {
             .request(&tgt_credential, &self.options.service_principal)?;
 
         // Step 3: Build AP-REQ for authentication
-        let ap_req_builder = ApReqBuilder::new(&service_credential);
+        let ap_req_options = crate::messages::ApReqOptions {
+            mutual_required: self.options.mutual_required,
+            use_session_key: false,
+            gssapi_checksum: true,
+            time_offset_secs: self.options.time_offset_secs,
+        };
+        let ap_req_builder = ApReqBuilder::new(&service_credential)
+            .with_options(ap_req_options);
         let ap_req_bytes = ap_req_builder.build()?;
 
         Ok(ap_req_bytes)
@@ -132,6 +143,16 @@ impl KerberosAuthenticator {
     /// The service credential contains the session key and ticket details,
     /// which may be useful for session management.
     pub fn authenticate_full(&self) -> crate::Result<(Vec<u8>, Credential)> {
+        let (ap_req, cred, _seq) = self.authenticate_full_with_seq()?;
+        Ok((ap_req, cred))
+    }
+
+    /// Perform the full Kerberos authentication chain and return
+    /// AP-REQ bytes, service credential, and the GSS initial seq number.
+    ///
+    /// The GSS init seq is needed to initialize the GSS engine for
+    /// subsequent data exchange (wrap/unwrap).
+    pub fn authenticate_full_with_seq(&self) -> crate::Result<(Vec<u8>, Credential, u32)> {
         // Step 1: Request TGT
         let tgt_requester = TgtRequester::new(
             self.options.realm.clone(),
@@ -148,10 +169,18 @@ impl KerberosAuthenticator {
         let service_credential = tgs_requester
             .request(&tgt_credential, &self.options.service_principal)?;
 
-        // Step 3: Build AP-REQ
-        let ap_req_builder = ApReqBuilder::new(&service_credential);
-        let ap_req_bytes = ap_req_builder.build()?;
+        // Step 3: Build AP-REQ with GSS checksum, extracting initial seq number
+        let ap_req_options = crate::messages::ApReqOptions {
+            mutual_required: self.options.mutual_required,
+            use_session_key: false,
+            gssapi_checksum: true,
+            time_offset_secs: self.options.time_offset_secs,
+        };
+        let ap_req_builder = ApReqBuilder::new(&service_credential)
+            .with_options(ap_req_options);
+        let (ap_req_bytes, gss_data) = ap_req_builder.build_with_gss_data()?;
+        let gss_init_seq = gss_data.gss_initial_seq;
 
-        Ok((ap_req_bytes, service_credential))
+        Ok((ap_req_bytes, service_credential, gss_init_seq))
     }
 }

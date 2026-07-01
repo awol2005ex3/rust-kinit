@@ -15,15 +15,14 @@ use kerberos_constants::key_usages::{
     KEY_USAGE_TGS_REP_ENC_PART_SESSION_KEY,
     KEY_USAGE_TGS_REQ_AUTHEN, KEY_USAGE_TGS_REQ_AUTHEN_CKSUM,
 };
-use kerberos_constants::kdc_options::{FORWARDABLE, RENEWABLE};
-use kerberos_constants::pa_data_types::PA_TGS_REQ;
-use kerberos_constants::principal_names::NT_SRV_INST;
+use kerberos_constants::kdc_options::{FORWARDABLE, RENEWABLE, RENEWABLE_OK};
+use kerberos_constants::pa_data_types::{PA_PAC_REQUEST, PA_TGS_REQ};
+use kerberos_constants::principal_names::NT_PRINCIPAL;
 use kerberos_crypto::{
     checksum_hmac_md5, checksum_sha_aes, new_kerberos_cipher,
     AesSizes,
 };
 use rand::Rng;
-use std::collections::HashSet;
 use std::net::IpAddr;
 /// Possible responses to a TGS-REQ request
 #[derive(Debug, PartialEq)]
@@ -63,7 +62,7 @@ pub enum TgsReqResponse {
 pub struct TgsRequester {
     realm: AsciiString,
     transporter: Box<dyn Transporter>,
-    etypes: HashSet<i32>,
+    etypes: Vec<i32>,
 }
 
 impl TgsRequester {
@@ -71,14 +70,12 @@ impl TgsRequester {
         return Self {
             realm,
             transporter: new_transporter(kdc_address, TransportProtocol::TCP),
-            etypes: [
+            // Order matters: AES256 first so KDC prefers it for session key
+            etypes: vec![
                 kerberos_constants::etypes::AES256_CTS_HMAC_SHA1_96,
                 kerberos_constants::etypes::AES128_CTS_HMAC_SHA1_96,
                 kerberos_constants::etypes::RC4_HMAC,
-            ]
-            .iter()
-            .cloned()
-            .collect(),
+            ],
         };
     }
 
@@ -90,6 +87,29 @@ impl TgsRequester {
         // This is a limitation since we don't have access to the original IpAddr
         // Users should use ::new() to create with a different protocol
         let _ = transport_protocol;
+    }
+
+    /// Request service ticket and also return the raw TGS-REQ bytes (for debugging).
+    pub fn request_with_raw(
+        &self,
+        tgt_credential: &Credential,
+        service_principal: &AsciiString,
+    ) -> Result<(Credential, Vec<u8>)> {
+        let raw_tgs_req = self.build_tgs_req(tgt_credential, service_principal)?;
+        let tgs_rep = self.send_tgs_req_raw(tgt_credential, &raw_tgs_req)?;
+
+        match tgs_rep {
+            TgsReqResponse::KrbError(krb_error) => {
+                return Err(Error::KrbErrorResponse(krb_error))?;
+            }
+            TgsReqResponse::TgsRep(tgs_rep) => {
+                let credential = self.extract_credential_from_tgs_rep(
+                    tgt_credential,
+                    tgs_rep,
+                )?;
+                return Ok((credential, raw_tgs_req));
+            }
+        }
     }
 
     pub fn request(
@@ -112,14 +132,13 @@ impl TgsRequester {
         }
     }
 
-    fn send_tgs_req(
+    /// Like send_tgs_req but takes pre-built TGS-REQ bytes.
+    fn send_tgs_req_raw(
         &self,
-        tgt_credential: &Credential,
-        service_principal: &AsciiString,
+        _tgt_credential: &Credential,
+        raw_tgs_req: &[u8],
     ) -> Result<TgsReqResponse> {
-        let raw_tgs_req =
-            self.build_tgs_req(tgt_credential, service_principal)?;
-        let raw_response = self.transporter.request_and_response(&raw_tgs_req)?;
+        let raw_response = self.transporter.request_and_response(raw_tgs_req)?;
 
         match KrbError::parse(&raw_response) {
             Ok((_, krb_error)) => {
@@ -130,6 +149,16 @@ impl TgsRequester {
                 return Ok(TgsReqResponse::TgsRep(tgs_rep));
             }
         }
+    }
+
+    fn send_tgs_req(
+        &self,
+        tgt_credential: &Credential,
+        service_principal: &AsciiString,
+    ) -> Result<TgsReqResponse> {
+        let raw_tgs_req =
+            self.build_tgs_req(tgt_credential, service_principal)?;
+        self.send_tgs_req_raw(tgt_credential, &raw_tgs_req)
     }
 
     fn build_tgs_req(
@@ -148,8 +177,14 @@ impl TgsRequester {
             return Err(Error::NotAvailableData("Empty service principal".into()));
         }
         
+        // Use NT_PRINCIPAL (value=1) to match MIT krb5 behavior.
+        // MIT krb5 gss_accept_sec_context checks the ticket's sname name_type
+        // against the acceptor's expected name_type (NT_PRINCIPAL). If they
+        // don't match, the server (Hive) rejects the GSS context.
+        // The KDC copies the name_type from the TGS-REQ body sname into the
+        // returned ticket's sname, so we must send NT_PRINCIPAL here.
         let mut sname = PrincipalName::new(
-            NT_SRV_INST,
+            NT_PRINCIPAL,
             parts[0].to_string(),
         );
         for part in &parts[1..] {
@@ -158,7 +193,19 @@ impl TgsRequester {
 
         let mut kdc_req_body = kerberos_asn1::KdcReqBody::default();
         kdc_req_body.kdc_options =
-            kerberos_asn1::KdcOptions::from(FORWARDABLE | RENEWABLE);
+            kerberos_asn1::KdcOptions::from(FORWARDABLE | RENEWABLE | RENEWABLE_OK);
+        // Include client IP address in TGS-REQ - MIT krb5 always does this,
+        // and Microsoft KDC requires it to include the PAC in the service ticket.
+        // Without addresses, KDC returns a ticket without authorization data (PAC).
+        use kerberos_asn1::HostAddress;
+        // Hard-code our machine's actual IP (10.110.149.18)
+        let local_ip = std::net::IpAddr::V4(std::net::Ipv4Addr::new(10, 110, 149, 18));
+        println!("[tgs] Including local IP {} in TGS-REQ addresses", local_ip);
+        let addr = HostAddress {
+            addr_type: 2,
+            address: vec![10, 110, 149, 18],
+        };
+        kdc_req_body.addresses = Some(vec![addr]);
         kdc_req_body.realm = self.realm.clone().into();
         kdc_req_body.sname = Some(sname);
         kdc_req_body.till = Utc::now()
@@ -185,9 +232,18 @@ impl TgsRequester {
         // Build TGS-REQ
         let mut tgs_req = TgsReq::default();
         tgs_req.req_body = kdc_req_body;
-        tgs_req.padata = Some(vec![pa_tgs_req]);
+        // Also request PAC (authorization data) in the service ticket.
+        // Microsoft KDC requires PA-PAC-REQUEST in TGS-REQ to include
+        // the PAC. Without it, the service ticket won't have the PAC,
+        // causing Hive to reject the GSS context.
+        let pa_pac_req = PaData::new(PA_PAC_REQUEST,
+            kerberos_asn1::KerbPaPacRequest::new(true).build());
 
-        return Ok(tgs_req.build());
+        tgs_req.padata = Some(vec![pa_tgs_req, pa_pac_req]);
+
+        let tgs_bytes = tgs_req.build();
+        eprintln!("[tgs] TGS-REQ ({} bytes)", tgs_bytes.len());
+        return Ok(tgs_bytes);
     }
 
     fn build_ap_req_for_tgs(
@@ -300,6 +356,22 @@ impl TgsRequester {
             kerberos_asn1::EncTgsRepPart::parse(&plaintext)?;
 
         // Map to credential (EncTgsRepPart -> EncAsRepPart via From trait)
+        // Also print the ticket's own enc_part (this goes into AP-REQ)
+        eprintln!("[tgs] Ticket sname: {:?}, realm: {:?}",
+            tgs_rep.ticket.sname.name_string, tgs_rep.ticket.realm);
+        eprintln!("[tgs] TGS-REP enc_part: etype={}, kvno={:?}, cipher={} bytes",
+            tgs_rep.enc_part.etype, tgs_rep.enc_part.kvno, tgs_rep.enc_part.cipher.len());
+        eprintln!("[tgs] TGS ticket enc_part: etype={}, kvno={:?}, cipher={} bytes",
+            tgs_rep.ticket.enc_part.etype, tgs_rep.ticket.enc_part.kvno, tgs_rep.ticket.enc_part.cipher.len());
+        eprintln!("[tgs] EncTgsRepPart session key etype={}, key_len={}, key_first8={:02x?}",
+            enc_tgs_rep_part.key.keytype, enc_tgs_rep_part.key.keyvalue.len(),
+            &enc_tgs_rep_part.key.keyvalue[..8.min(enc_tgs_rep_part.key.keyvalue.len())]);
+        eprintln!("[tgs] EncTgsRepPart authtime={:?}, endtime={:?}, last_req={:?}",
+            enc_tgs_rep_part.authtime, enc_tgs_rep_part.endtime, enc_tgs_rep_part.last_req);
+        eprintln!("[tgs] EncTgsRepPart nonce={:?}, flags={:?}",
+            enc_tgs_rep_part.nonce, enc_tgs_rep_part.flags);
+
+        
         let credential = Credential::new(
             tgs_rep.crealm,
             tgs_rep.cname,

@@ -5,15 +5,21 @@
 
 use crate::credentials::Credential;
 use crate::error::*;
-use chrono::{Timelike, Utc};
+use chrono::{Duration, Timelike, Utc};
+use rand;
 use kerberos_asn1::{
     ApReq, Asn1Object, Authenticator, EncryptedData,
 };
-use kerberos_constants::key_usages::KEY_USAGE_AP_REQ_AUTHEN;
+use kerberos_constants::key_usages::{KEY_USAGE_AP_REQ_AUTHEN};
 use kerberos_crypto::{
     new_kerberos_cipher,
 };
 
+
+/// GSS checksum data extracted from AP-REQ building
+pub struct GssChecksumData {
+    pub gss_initial_seq: u32,
+}
 
 /// Options for building an AP-REQ
 #[derive(Debug, Clone)]
@@ -22,6 +28,13 @@ pub struct ApReqOptions {
     pub mutual_required: bool,
     /// Whether to use session key instead of ticket key
     pub use_session_key: bool,
+    /// Whether to include a GSSAPI checksum (cksumtype=0x8003) in the Authenticator.
+    /// Some Java GSSAPI implementations are strict about this.
+    pub gssapi_checksum: bool,
+    /// Time offset in seconds to add to Utc::now() for the authenticator's ctime.
+    /// Use this to correct for clock skew between client and KDC/server.
+    /// Positive = client clock behind server, negative = client ahead.
+    pub time_offset_secs: i64,
 }
 
 impl Default for ApReqOptions {
@@ -29,6 +42,8 @@ impl Default for ApReqOptions {
         Self {
             mutual_required: true,
             use_session_key: false,
+            gssapi_checksum: true,
+            time_offset_secs: 0,
         }
     }
 }
@@ -83,24 +98,66 @@ impl<'a> ApReqBuilder<'a> {
     /// - In a PA-TGS-REQ padata for TGS requests
     /// - As the initial token in a GSS-API/SASL Kerberos exchange
     pub fn build(&self) -> Result<Vec<u8>> {
+        self.build_impl().map(|(bytes, _)| bytes)
+    }
+
+    /// Build the AP-REQ message and return GSS initial sequence number.
+    /// Returns (DER-encoded AP-REQ, GSS initial seq number).
+    pub fn build_with_gss_data(&self) -> Result<(Vec<u8>, GssChecksumData)> {
+        self.build_impl()
+    }
+
+    fn build_impl(&self) -> Result<(Vec<u8>, GssChecksumData)> {
         let session_key = self.credential.key();
         let etype = session_key.keytype;
 
-        // Build the authenticator
-        let now = Utc::now();
+        let gss_seq: u32 = rand::random::<u32>();
+        let gssapi_checksum: Option<kerberos_asn1::Checksum> = if self.options.gssapi_checksum {
+            // MIT krb5 make_gss_checksum() for GSS_C_NO_CHANNEL_BINDINGS (null):
+            // Format (RFC 4121 §4.1.1.1, MIT krb5 src/lib/gssapi/krb5/make_checksum.c):
+            //   [0x10, 0x00, 0x00, 0x00]  ← GSS_C_AF_EXT (address family extension)
+            //                              / NOT a length field! Indicates no channel bindings
+            //   [16 bytes zeros]            ← channel binding hash (GSS_C_NO_CHANNEL_BINDINGS)
+            //   [gss_flags (4B LE)]         ← e.g. 0x0E = MUTUAL|REPLAY|SEQUENCE
+            //   [seq_number (4B LE)]
+            // Total: 28 bytes.
+            // CRITICAL: OpenJDK OverloadedChecksum checks:
+            //   checksumBytes[0..3] == {0x10, 0x00, 0x00, 0x00}
+            //   If first byte is 0x00, OpenJDK throws "Incorrect checksum"!
+            let mut v = Vec::with_capacity(28);
+            v.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]);   // GSS_C_AF_EXT
+            v.extend_from_slice(&[0u8; 16]);                    // 16B zeros (no channel bindings)
+            let gss_flags: u32 = if self.options.mutual_required { 0x0000000E } else { 0x0000000C };
+            v.extend_from_slice(&gss_flags.to_le_bytes());      // flags (LE)
+            println!("[apreq] GSS initial seq_number={}", gss_seq);
+            v.extend_from_slice(&gss_seq.to_le_bytes());         // seq_number (LE)
+            Some(kerberos_asn1::Checksum {
+                cksumtype: 0x8003,
+                checksum: v,
+            })
+        } else {
+            None
+        };
+        let mut now = Utc::now();
+        if self.options.time_offset_secs != 0 {
+            now = now + chrono::Duration::seconds(self.options.time_offset_secs);
+        }
         let authenticator = Authenticator {
             authenticator_vno: 5,
             crealm: self.credential.crealm().clone(),
             cname: self.credential.cname().clone(),
-            cksum: None,
+            cksum: gssapi_checksum,
             cusec: (now.nanosecond() / 1000) as i32,
             ctime: now.into(),
             subkey: None,
-            seq_number: None,
+                seq_number: if self.options.gssapi_checksum { Some(gss_seq) } else { None },
             authorization_data: None,
         };
 
         let raw_authenticator = authenticator.build();
+        eprintln!("[apreq] Authenticator plaintext ({} bytes): {:02x?}", raw_authenticator.len(), raw_authenticator);
+        eprintln!("[apreq] Session key etype={}, bytes={:02x?}", etype, session_key.keyvalue);
+        eprintln!("[apreq] key_usage=AP_REQ_AUTHEN({})", KEY_USAGE_AP_REQ_AUTHEN);
 
         // Encrypt authenticator with the service session key
         let cipher = new_kerberos_cipher(etype)?;
@@ -109,6 +166,7 @@ impl<'a> ApReqBuilder<'a> {
             KEY_USAGE_AP_REQ_AUTHEN,
             &raw_authenticator,
         );
+        eprintln!("[apreq] cipher after encrypt ({} bytes): {:02x?}", encrypted_auth.len(), encrypted_auth);
 
         let enc_auth = EncryptedData::new(etype, None, encrypted_auth);
 
@@ -131,7 +189,8 @@ impl<'a> ApReqBuilder<'a> {
             authenticator: enc_auth,
         };
 
-        return Ok(ap_req.build());
+        let _dummy_seq: u32 = 0;
+        return Ok((ap_req.build(), GssChecksumData { gss_initial_seq: gss_seq }));
     }
 }
 
