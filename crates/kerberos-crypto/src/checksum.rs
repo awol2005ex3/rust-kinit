@@ -22,23 +22,25 @@ pub fn checksum_sha_aes(
     plaintext: &[u8],
     aes_sizes: &AesSizes,
 ) -> Vec<u8> {
-    // Try both big-endian and little-endian
-    // Standard: be_bytes + 0x99
+    // RFC 3962 §5: usage number as 4-octet BE + 0x99 = 5 bytes
     let mut key_usage_bytes = key_usage.to_be_bytes().to_vec();
     key_usage_bytes.push(0x99);
     let kc = dk(key, &key_usage_bytes, aes_sizes);
     let mac = hmac_sha1(&kc, plaintext);
-    let ck_be = mac[..12].to_vec();
+    mac[..12].to_vec()
+}
 
-    // LE variant
+pub fn checksum_sha_aes_le(
+    key: &[u8],
+    key_usage: i32,
+    plaintext: &[u8],
+    aes_sizes: &AesSizes,
+) -> Vec<u8> {
     let mut key_usage_bytes_le = key_usage.to_le_bytes().to_vec();
     key_usage_bytes_le.push(0x99);
     let kc_le = dk(key, &key_usage_bytes_le, aes_sizes);
     let mac_le = hmac_sha1(&kc_le, plaintext);
-    let ck_le = mac_le[..12].to_vec();
-
-    // Return BE by default, but we'll try LE in our unwrap
-    ck_be
+    mac_le[..12].to_vec()
 }
 
 #[cfg(test)]

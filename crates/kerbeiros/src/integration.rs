@@ -183,4 +183,37 @@ impl KerberosAuthenticator {
 
         Ok((ap_req_bytes, service_credential, gss_init_seq))
     }
+
+    /// Like authenticate_full_with_seq but also returns the GSS subkey
+    /// needed by Java JGSS-compatible GSS engines
+    pub fn authenticate_full_with_seq_and_subkey(&self) -> crate::Result<(Vec<u8>, Credential, u32, u32, Vec<u8>, i32)> {
+        // Step 1: Request TGT
+        let tgt_requester = TgtRequester::new(
+            self.options.realm.clone(),
+            self.options.kdc_address,
+        );
+        let tgt_credential = tgt_requester
+            .request(&self.options.username, Some(&self.options.user_key))?;
+
+        // Step 2: Request service ticket using TGT
+        let tgs_requester = TgsRequester::new(
+            self.options.realm.clone(),
+            self.options.kdc_address,
+        );
+        let service_credential = tgs_requester
+            .request(&tgt_credential, &self.options.service_principal)?;
+
+        // Step 3: Build AP-REQ with GSS checksum + subkey
+        let ap_req_options = crate::messages::ApReqOptions {
+            mutual_required: self.options.mutual_required,
+            use_session_key: false,
+            gssapi_checksum: true,
+            time_offset_secs: self.options.time_offset_secs,
+        };
+        let ap_req_builder = ApReqBuilder::new(&service_credential)
+            .with_options(ap_req_options);
+        let (ap_req_bytes, gss_data) = ap_req_builder.build_with_gss_data()?;
+
+        Ok((ap_req_bytes, service_credential, gss_data.gss_initial_seq, gss_data.subkey_type as u32, gss_data.subkey, gss_data.subkey_type))
+    }
 }

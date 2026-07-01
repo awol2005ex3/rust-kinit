@@ -10,7 +10,7 @@
 // Meanwhile, our WRAP token may need SGN_ALG=0x00 (SSPI) which is what
 // Python SSPI produces. The server MIC uses 0x01 which is RFC 4121 format.
 // The server rejects our WRAP because GSS unwrap fails at SASL layer.
-use kerberos_crypto::{checksum_sha_aes, AesSizes};
+use kerberos_crypto::{checksum_sha_aes, checksum_sha_aes_le, AesSizes};
 
 const TOK_WRAP: [u8; 2] = [0x05, 0x04];
 const GSS_HEADER_LEN: usize = 16;
@@ -60,15 +60,16 @@ impl KerberosGssEngine {
         header[4..6].copy_from_slice(&[0x00, 0x0c]);   // FILLER
         header[12..16].copy_from_slice(&seq.to_be_bytes()); // SND_SEQ at [12..16]
 
-        // RFC 4121 checksum input: EC||RRC||header||data||0xFF*pad||0*16
+        // RFC 4121 §4.2.4 checksum input: EC(2B)||RRC(4B)||header(16B)||data||0xFF*pad||0*16
         let mut ci = Vec::new();
-        ci.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // EC||RRC = 0
-        ci.extend_from_slice(&header[..]);                 // header 16B
-        ci.extend_from_slice(plaintext);                   // data
+        ci.extend_from_slice(&header[6..8]);   // EC (2B)
+        ci.extend_from_slice(&header[8..12]);  // RRC (4B)
+        ci.extend_from_slice(&header[..]);     // header 16B
+        ci.extend_from_slice(plaintext);       // data
         if pad_len > 0 {
             ci.extend(std::iter::repeat(0xFFu8).take(pad_len));
         }
-        ci.extend_from_slice(&[0u8; 16]);                  // 0*16 suffix
+        ci.extend_from_slice(&[0u8; 16]);      // 0*16 suffix
 
         let cksum = checksum_sha_aes(
             &self.session_key, key_usage, &ci, &self.aes_sizes,
@@ -197,55 +198,60 @@ impl KerberosGssEngine {
             received_cksum[4],received_cksum[5],received_cksum[6],received_cksum[7],
             received_cksum[8],received_cksum[9],received_cksum[10],received_cksum[11]);
 
-        for usage in &[22, 23, 24, 25, 17] {
-            for seq_bytestart in &[10, 12] {
-                let seq_pos = *seq_bytestart;
-                let seq = u32::from_be_bytes([
-                    header[seq_pos], header[seq_pos+1], 
-                    header[seq_pos+2], header[seq_pos+3]
-                ]);
-                
-                // Format A: EC||RRC(4) || header(16) || data || 0xFF*pad || 0*16
-                let ecrr: [u8; 4] = [header[6], header[7], header[8], header[9]];
-                for &use_ecrr in &[true, false] {
-                    let mut ci = Vec::new();
-                    if use_ecrr { ci.extend_from_slice(&ecrr); }
-                    ci.extend_from_slice(&header[..]);
-                    ci.extend_from_slice(plaintext);
-                    if pad_len > 0 { ci.extend(std::iter::repeat(0xFFu8).take(pad_len)); }
-                    ci.extend_from_slice(&[0u8; 16]);
-                    let c = checksum_sha_aes(&self.session_key, *usage, &ci, &self.aes_sizes);
-                    if c == received_cksum {
-                        return Ok(plaintext.to_vec());
-                    }
-                    // Debug first combo
-                    if *usage == 22 && seq_pos == 12 && use_ecrr {
-                        eprintln!("  [unwrap] k22_s12_ecrr: computed={:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-                            c[0],c[1],c[2],c[3],c[4],c[5],c[6],c[7],c[8],c[9],c[10],c[11]);
-                    }
-                }
-                
-                // Format B: seq(4) || header(16) || data || 0*12 (SSPI)
-                let mut ci = Vec::new();
-                ci.extend_from_slice(&seq.to_be_bytes());
-                ci.extend_from_slice(&header[..]);
-                ci.extend_from_slice(plaintext);
-                ci.extend_from_slice(&[0u8; CKSUM_LEN]);
-                let c = checksum_sha_aes(&self.session_key, *usage, &ci, &self.aes_sizes);
-                if c == received_cksum {
-                    return Ok(plaintext.to_vec());
-                }
-                
-                // Format C: header(16) || data || 0*12
-                let mut ci2 = Vec::new();
-                ci2.extend_from_slice(&header[..]);
-                ci2.extend_from_slice(plaintext);
-                ci2.extend_from_slice(&[0u8; CKSUM_LEN]);
-                let c2 = checksum_sha_aes(&self.session_key, *usage, &ci2, &self.aes_sizes);
-                if c2 == received_cksum {
-                    return Ok(plaintext.to_vec());
-                }
+        // Helper: try all formats for a given (key_usage, use_le)
+        fn try_formats(
+            key: &[u8], sizes: &AesSizes, ku: i32, use_le: bool,
+            header: &[u8], plaintext: &[u8], pad_len: usize,
+            expected: &[u8],
+        ) -> Option<Vec<u8>> {
+            let ec: [u8; 2] = [header[6], header[7]];
+            let rrc: [u8; 4] = [header[8], header[9], header[10], header[11]];
+            
+            // Format 1: EC(2)||RRC(4)||header(16)||data||0xFF*pad||0*16 (RFC 4121)
+            let mut f1 = Vec::new();
+            f1.extend_from_slice(&ec); f1.extend_from_slice(&rrc);
+            f1.extend_from_slice(&header[..]);
+            f1.extend_from_slice(plaintext);
+            if pad_len > 0 { f1.extend(std::iter::repeat(0xFFu8).take(pad_len)); }
+            f1.extend_from_slice(&[0u8; 16]);
+            
+            let c = if use_le {
+                checksum_sha_aes_le(key, ku, &f1, sizes)
+            } else {
+                checksum_sha_aes(key, ku, &f1, sizes)
+            };
+            if c == expected {
+                eprintln!("  [unwrap] MATCH ku={} le={}", ku, use_le);
+                return Some(plaintext.to_vec());
             }
+            None
+        }
+
+        for &use_le in &[false, true] {
+            for &ku in &[22i32, 23, 24, 25, 17] {
+                if let Some(r) = try_formats(
+                    &self.session_key, &self.aes_sizes, ku, use_le,
+                    header, plaintext, pad_len, received_cksum,
+                ) { return Ok(r); }
+            }
+        }
+        // Debug: print one computed v expected
+        {
+            let ec: [u8; 2] = [header[6], header[7]];
+            let rrc: [u8; 4] = [header[8], header[9], header[10], header[11]];
+            let mut f1 = Vec::new();
+            f1.extend_from_slice(&ec); f1.extend_from_slice(&rrc);
+            f1.extend_from_slice(&header[..]);
+            f1.extend_from_slice(plaintext);
+            if pad_len > 0 { f1.extend(std::iter::repeat(0xFFu8).take(pad_len)); }
+            f1.extend_from_slice(&[0u8; 16]);
+            let c22be = checksum_sha_aes(&self.session_key, 22, &f1, &self.aes_sizes);
+            let c22le = checksum_sha_aes_le(&self.session_key, 22, &f1, &self.aes_sizes);
+            eprintln!("  [unwrap] ck_recv={:02x?}", received_cksum);
+            eprintln!("  [unwrap] data={:02x?} pad_len={}", plaintext, pad_len);
+            eprintln!("  [unwrap] ec_rrc_f1_cin={}B first16={:02x?}", f1.len(), &f1[..16.min(f1.len())]);
+            eprintln!("  [unwrap] ck_22be={:02x?}", c22be);
+            eprintln!("  [unwrap] ck_22le={:02x?}", c22le);
         }
 
         Err(std::io::Error::new(
@@ -254,4 +260,8 @@ impl KerberosGssEngine {
 
     pub fn seq_num(&self) -> u32 { self.seq_num }
     pub fn reset_seq_num(&mut self, seq: u32) { self.seq_num = seq; }
+    pub fn session_key_ref(&self) -> &[u8] { &self.session_key }
+    pub fn key_type(&self) -> i32 {
+        if self.aes_sizes.seed_size() == 32 { 18 } else { 17 }
+    }
 }

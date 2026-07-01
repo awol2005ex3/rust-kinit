@@ -19,6 +19,8 @@ use kerberos_crypto::{
 /// GSS checksum data extracted from AP-REQ building
 pub struct GssChecksumData {
     pub gss_initial_seq: u32,
+    pub subkey: Vec<u8>,
+    pub subkey_type: i32,
 }
 
 /// Options for building an AP-REQ
@@ -112,6 +114,12 @@ impl<'a> ApReqBuilder<'a> {
         let etype = session_key.keytype;
 
         let gss_seq: u32 = rand::random::<u32>();
+        // Java JGSS useSubkey=true: generate random AES session key as subkey
+        // OpenJDK InitSecContextToken creates subkey for every AP-REQ
+        let subkey_type = etype.max(17); // at least AES128
+        let subkey_len = match subkey_type { 18 => 32, _ => 16 };
+        let subkey_bytes: Vec<u8> = (0..subkey_len).map(|_| rand::random::<u8>()).collect();
+        eprintln!("[apreq] Generated subkey etype={}, bytes={:02x?}", subkey_type, subkey_bytes);
         let gssapi_checksum: Option<kerberos_asn1::Checksum> = if self.options.gssapi_checksum {
             // MIT krb5 make_gss_checksum() for GSS_C_NO_CHANNEL_BINDINGS (null):
             // Format (RFC 4121 §4.1.1.1, MIT krb5 src/lib/gssapi/krb5/make_checksum.c):
@@ -149,7 +157,7 @@ impl<'a> ApReqBuilder<'a> {
             cksum: gssapi_checksum,
             cusec: (now.nanosecond() / 1000) as i32,
             ctime: now.into(),
-            subkey: None,
+            subkey: Some(kerberos_asn1::EncryptionKey { keytype: subkey_type as i32, keyvalue: subkey_bytes.clone() }),
                 seq_number: if self.options.gssapi_checksum { Some(gss_seq) } else { None },
             authorization_data: None,
         };
@@ -189,8 +197,7 @@ impl<'a> ApReqBuilder<'a> {
             authenticator: enc_auth,
         };
 
-        let _dummy_seq: u32 = 0;
-        return Ok((ap_req.build(), GssChecksumData { gss_initial_seq: gss_seq }));
+        return Ok((ap_req.build(), GssChecksumData { gss_initial_seq: gss_seq, subkey: subkey_bytes, subkey_type }));
     }
 }
 
