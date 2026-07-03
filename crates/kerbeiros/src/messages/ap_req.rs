@@ -116,6 +116,8 @@ impl<'a> ApReqBuilder<'a> {
         let gss_seq: u32 = rand::random::<u32>();
         // Java JGSS useSubkey=true: generate random AES session key as subkey
         // OpenJDK InitSecContextToken creates subkey for every AP-REQ
+        // Java JGSS: useSubkey=true means we MUST put a subkey in the Authenticator.
+        // MIT krb5 uses subkey as the base key for GSS per-message tokens.
         let subkey_type = etype.max(17); // at least AES128
         let subkey_len = match subkey_type { 18 => 32, _ => 16 };
         let subkey_bytes: Vec<u8> = (0..subkey_len).map(|_| rand::random::<u8>()).collect();
