@@ -119,17 +119,12 @@ impl KerberosGssEngine {
         for &ku in &key_usages {
             let c = checksum_sha_aes(&self.session_key, ku, &ci, &self.aes_sizes);
             if c == received_cksum {
-                eprintln!("  [unwrap] MATCH ku={}! (header={:02x?})", ku, &hdr[..4]);
+                // MATCH ku found
                 return Ok(plaintext.to_vec());
             }
         }
 
-        // Debug dump
-        eprintln!("  [unwrap] KEY={}", hex_str(&self.session_key));
-        eprintln!("  [unwrap] HDR={}", hex_str(hdr));
-        eprintln!("  [unwrap] DATA={}", hex_str(plaintext));
-        eprintln!("  [unwrap] CI={}", hex_str(&ci));
-        eprintln!("  [unwrap] CKSUM_RCVD={}", hex_str(received_cksum));
+        // checksum verification failed
         Err(std::io::Error::new(std::io::ErrorKind::InvalidData,
             "GSS checksum verification failed"))
     }

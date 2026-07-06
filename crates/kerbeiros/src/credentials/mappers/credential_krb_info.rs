@@ -60,25 +60,9 @@ impl CredentialKrbInfoMapper {
             )?,
         };
 
-        // 记录解密后的明文信息到日志文件
-        println!(
-            "[kdc_rep_to_credential] 解密成功：明文长度={}, 首字节=0x{:02x}, principal={}@{}\n",
-            plaintext.len(),
-            plaintext.get(0).copied().unwrap_or(0),
-            kdc_rep.cname.name_string.join("/"),
-            kdc_rep.crealm
-        );
-        // 打印前 64 字节帮助诊断
-        let preview_len = 64.min(plaintext.len());
-        println!(
-            "[kdc_rep_to_credential] 明文前 {} 字节: {:02x?}\n",
-            preview_len,
-            &plaintext[..preview_len]
-        );
-
+        // 解密成功
         match EncAsRepPart::parse(&plaintext) {
             Ok((_, enc_kdc_rep_part)) => {
-                println!("[kdc_rep_to_credential] EncAsRepPart::parse 成功\n");
                 return Ok(Credential::new(
                     kdc_rep.crealm,
                     kdc_rep.cname,
@@ -87,15 +71,6 @@ impl CredentialKrbInfoMapper {
                 ));
             }
             Err(parse_err) => {
-                println!(
-                    "[kdc_rep_to_credential] EncAsRepPart::parse 失败: {:?}\n",
-                    parse_err
-                );
-                println!(
-                    "[kdc_rep_to_credential] 完整明文 ({} 字节): {:02x?}\n",
-                    plaintext.len(),
-                    &plaintext[..]
-                );
                 return Err(parse_err.into());
             }
         }
@@ -162,66 +137,18 @@ impl CredentialKrbInfoMapper {
         kdc_rep: &AsRep,
     ) -> Result<Vec<u8>> {
         let enc_etype = kdc_rep.enc_part.etype;
-        let kvno = kdc_rep.enc_part.kvno;
-
-        // [DEBUG] 记录解密参数
-        let key_type_name = match key {
-            Key::AES256Key(_) => "AES256",
-            Key::AES128Key(_) => "AES128",
-            Key::RC4Key(_) => "RC4",
-            _ => "UNKNOWN",
-        };
-        println!(
-            "[try_decrypt] enc_etype={}, kvno={:?}, key_type={}\n",
-            enc_etype, kvno, key_type_name
-        );
-        println!(
-            "[try_decrypt] cipher len={}, key len={:?}\n",
-            kdc_rep.enc_part.cipher.len(),
-            match key {
-                Key::AES256Key(k) => Some(k.len()),
-                Key::AES128Key(k) => Some(k.len()),
-                Key::RC4Key(k) => Some(k.len()),
-                _ => None,
-            }
-        );
 
         let cipher = new_kerberos_cipher(enc_etype)?;
-        let plaintext = cipher.decrypt(
+        let mut pt = cipher.decrypt(
             key.as_bytes(),
             KEY_USAGE_AS_REP_ENC_PART,
             &kdc_rep.enc_part.cipher,
-        );
+        )?;
 
-        match &plaintext {
-            Ok(pt) => {
-                println!(
-                    "[try_decrypt] 解密成功: plaintext len={}, 首字节=0x{:02x}\n",
-                    pt.len(),
-                    pt.get(0).copied().unwrap_or(0)
-                );
-            }
-            Err(e) => {
-                println!("[try_decrypt] 解密失败: {:?}\n", e);
-            }
-        }
-
-        let plaintext = plaintext?;
-
-        // [FIX] Microsoft KDC / 某些 KDC 返回的 plaintext 首字节可能是 0x7a (APPLICATION 26)
-        //       但 EncAsRepPart::parse 期望 APPLICATION 25 (0x79)
-        let mut pt = plaintext;
         if pt[0] == 0x7a {
-            println!("[try_decrypt] 修复 Microsoft KDC tag: 0x7a -> 0x79\n");
             pt[0] = 0x79;
-        } else if pt[0] != 0x79 {
-            let tag_bytes = &pt[0..4.min(pt.len())];
-            println!(
-                "[try_decrypt] EncAsRepPart 首字节异常: 期望 0x79, 收到 0x{:02x}, 前4字节={:02x?}\n",
-                pt[0], tag_bytes
-            );
         }
-        return Ok(pt);
+        Ok(pt)
     }
 }
 

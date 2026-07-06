@@ -200,7 +200,7 @@ impl TgsRequester {
         use kerberos_asn1::HostAddress;
         // Hard-code our machine's actual IP (10.110.149.18)
         let local_ip = std::net::IpAddr::V4(std::net::Ipv4Addr::new(10, 110, 149, 18));
-        println!("[tgs] Including local IP {} in TGS-REQ addresses", local_ip);
+        // including local IP in TGS-REQ addresses
         let addr = HostAddress {
             addr_type: 2,
             address: vec![10, 110, 149, 18],
@@ -242,7 +242,7 @@ impl TgsRequester {
         tgs_req.padata = Some(vec![pa_tgs_req, pa_pac_req]);
 
         let tgs_bytes = tgs_req.build();
-        eprintln!("[tgs] TGS-REQ ({} bytes)", tgs_bytes.len());
+        // TGS-REQ built
         return Ok(tgs_bytes);
     }
 
@@ -357,19 +357,7 @@ impl TgsRequester {
 
         // Map to credential (EncTgsRepPart -> EncAsRepPart via From trait)
         // Also print the ticket's own enc_part (this goes into AP-REQ)
-        eprintln!("[tgs] Ticket sname: {:?}, realm: {:?}",
-            tgs_rep.ticket.sname.name_string, tgs_rep.ticket.realm);
-        eprintln!("[tgs] TGS-REP enc_part: etype={}, kvno={:?}, cipher={} bytes",
-            tgs_rep.enc_part.etype, tgs_rep.enc_part.kvno, tgs_rep.enc_part.cipher.len());
-        eprintln!("[tgs] TGS ticket enc_part: etype={}, kvno={:?}, cipher={} bytes",
-            tgs_rep.ticket.enc_part.etype, tgs_rep.ticket.enc_part.kvno, tgs_rep.ticket.enc_part.cipher.len());
-        eprintln!("[tgs] EncTgsRepPart session key etype={}, key_len={}, key_first8={:02x?}",
-            enc_tgs_rep_part.key.keytype, enc_tgs_rep_part.key.keyvalue.len(),
-            &enc_tgs_rep_part.key.keyvalue[..8.min(enc_tgs_rep_part.key.keyvalue.len())]);
-        eprintln!("[tgs] EncTgsRepPart authtime={:?}, endtime={:?}, last_req={:?}",
-            enc_tgs_rep_part.authtime, enc_tgs_rep_part.endtime, enc_tgs_rep_part.last_req);
-        eprintln!("[tgs] EncTgsRepPart nonce={:?}, flags={:?}",
-            enc_tgs_rep_part.nonce, enc_tgs_rep_part.flags);
+        // TGS-REP processed
 
         
         let credential = Credential::new(

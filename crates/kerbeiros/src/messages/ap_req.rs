@@ -121,7 +121,7 @@ impl<'a> ApReqBuilder<'a> {
         let subkey_type = etype.max(17); // at least AES128
         let subkey_len = match subkey_type { 18 => 32, _ => 16 };
         let subkey_bytes: Vec<u8> = (0..subkey_len).map(|_| rand::random::<u8>()).collect();
-        eprintln!("[apreq] Generated subkey etype={}, bytes={:02x?}", subkey_type, subkey_bytes);
+        // subkey generated
         let gssapi_checksum: Option<kerberos_asn1::Checksum> = if self.options.gssapi_checksum {
             // MIT krb5 make_gss_checksum() for GSS_C_NO_CHANNEL_BINDINGS (null):
             // Format (RFC 4121 §4.1.1.1, MIT krb5 src/lib/gssapi/krb5/make_checksum.c):
@@ -139,7 +139,7 @@ impl<'a> ApReqBuilder<'a> {
             v.extend_from_slice(&[0u8; 16]);                    // 16B zeros (no channel bindings)
             let gss_flags: u32 = if self.options.mutual_required { 0x0000000E } else { 0x0000000C };
             v.extend_from_slice(&gss_flags.to_le_bytes());      // flags (LE)
-            println!("[apreq] GSS initial seq_number={}", gss_seq);
+            // seq_number set
             v.extend_from_slice(&gss_seq.to_le_bytes());         // seq_number (LE)
             Some(kerberos_asn1::Checksum {
                 cksumtype: 0x8003,
@@ -165,9 +165,7 @@ impl<'a> ApReqBuilder<'a> {
         };
 
         let raw_authenticator = authenticator.build();
-        eprintln!("[apreq] Authenticator plaintext ({} bytes): {:02x?}", raw_authenticator.len(), raw_authenticator);
-        eprintln!("[apreq] Session key etype={}, bytes={:02x?}", etype, session_key.keyvalue);
-        eprintln!("[apreq] key_usage=AP_REQ_AUTHEN({})", KEY_USAGE_AP_REQ_AUTHEN);
+        // authenticator encrypted below
 
         // Encrypt authenticator with the service session key
         let cipher = new_kerberos_cipher(etype)?;
@@ -176,7 +174,7 @@ impl<'a> ApReqBuilder<'a> {
             KEY_USAGE_AP_REQ_AUTHEN,
             &raw_authenticator,
         );
-        eprintln!("[apreq] cipher after encrypt ({} bytes): {:02x?}", encrypted_auth.len(), encrypted_auth);
+        // cipher ready
 
         let enc_auth = EncryptedData::new(etype, None, encrypted_auth);
 
