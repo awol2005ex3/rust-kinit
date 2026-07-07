@@ -169,7 +169,7 @@ impl TgsRequester {
         // Build KDC-REQ-BODY for TGS-REQ
         // Split SPN string into components on '/' and strip '@REALM' suffix
         let spn_str = service_principal.as_str();
-        // Remove @REALM suffix if present (e.g. "hive/bd-pr-nn1@GHAC.COM" -> "hive/bd-pr-nn1")
+        // Remove @REALM suffix if present (e.g. "hive/bd-pr-nn1@XXX.COM" -> "hive/bd-pr-nn1")
         let spn_clean = spn_str.split('@').next().unwrap_or(spn_str);
         let parts: Vec<&str> = spn_clean.split('/').collect();
         
