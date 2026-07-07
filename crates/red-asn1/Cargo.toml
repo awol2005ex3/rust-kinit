@@ -1,6 +1,6 @@
 [package]
 name = "awol2005ex3-red-asn1"
-version = "0.3.7"
+version = "0.3.8"
 edition.workspace = true
 description = "ASN.1 library for Kerberos protocol"
 license.workspace = true

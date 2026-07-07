@@ -1,6 +1,6 @@
 [package]
 name = "awol2005ex3-klist"
-version = "0.1.0"
+version = "0.1.1"
 description = "列出 Kerberos ccache 中的凭据信息"
 edition.workspace = true
 license.workspace = true

@@ -1,6 +1,6 @@
 [package]
 name = "awol2005ex3-red-asn1-derive"
-version = "0.2.3"
+version = "0.2.4"
 edition.workspace = true
 description = "Derive macros for red-asn1 ASN.1 library"
 license.workspace = true

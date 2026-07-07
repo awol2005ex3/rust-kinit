@@ -1,6 +1,6 @@
 [package]
 name = "awol2005ex3-kerbeiros"
-version = "0.4.1"
+version = "0.4.2"
 edition.workspace = true
 description = "Kerberos client library (with MS-KDC bug fixes)"
 license.workspace = true
