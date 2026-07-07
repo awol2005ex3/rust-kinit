@@ -198,8 +198,6 @@ impl TgsRequester {
         // and Microsoft KDC requires it to include the PAC in the service ticket.
         // Without addresses, KDC returns a ticket without authorization data (PAC).
         use kerberos_asn1::HostAddress;
-        // Hard-code our machine's actual IP (10.110.149.18)
-        let local_ip = std::net::IpAddr::V4(std::net::Ipv4Addr::new(10, 110, 149, 18));
         // including local IP in TGS-REQ addresses
         let addr = HostAddress {
             addr_type: 2,

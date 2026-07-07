@@ -133,9 +133,7 @@ impl KerberosGssEngine {
     pub fn reset_seq_num(&mut self, seq: u32) { self.seq_num = seq; }
 }
 
-fn hex_str(b: &[u8]) -> String {
-    b.iter().map(|x| format!("{:02x}", x)).collect::<Vec<_>>().join("")
-}
+
 
 #[cfg(test)]
 mod test {

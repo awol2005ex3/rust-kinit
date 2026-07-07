@@ -5,7 +5,7 @@
 
 use crate::credentials::Credential;
 use crate::error::*;
-use chrono::{Duration, Timelike, Utc};
+use chrono::{Timelike, Utc};
 use rand;
 use kerberos_asn1::{
     ApReq, Asn1Object, Authenticator, EncryptedData,
