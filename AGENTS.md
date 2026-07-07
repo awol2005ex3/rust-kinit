@@ -82,6 +82,490 @@ rust-kinit/
 
 ---
 
+## 代码地图（Code Map）
+
+> 按 crate 列出每个模块的公共 API 签名。修改代码前先查此处，避免从头读完整代码。
+> 标注格式：`pub fn 函数名(参数) -> 返回值` / `pub struct 结构体` / `pub enum 枚举`
+
+---
+
+### kerbeiros（核心认证库）
+
+**crates/kerbeiros/src/lib.rs** — 根模块，pub use 重导出
+
+| 导出路径 | 类目 |
+|---|---|
+| `Error`, `Result<T>` | enum / type alias (来自 `error.rs`) |
+| `AsRequester`, `AsReqResponse`, `TgtRequester`, `TgsRequester`, `TgsReqResponse` | requesters 模块 |
+| `TransportProtocol` | 传输协议枚举 |
+| `Credential`, `CredentialWarehouse` | credentials 模块 |
+| `GssChecksumData`, `ApReqOptions`, `ApReqBuilder` | messages/ap_req 模块 |
+| `AsRep`, `AsReq`, `KrbError`, `TgsRep`, `TgsReq`, `EncTgsRepPart` | messages/mod (re-export from kerberos-asn1) |
+| `KerberosAuthenticator`, `KerberosAuthOptions` | integration 模块 |
+| `KerberosGssEngine` | gss_engine 模块 |
+| `get_local_ip()`, `resolve_realm_kdc()` | utils 模块 |
+
+---
+
+#### error.rs — 错误类型
+
+```rust
+pub enum Error {
+    Asn1Error(kerberos_asn1::Error),
+    CryptographyError(kerberos_crypto::Error),
+    InvalidAscii, InvalidUtf8, InvalidMicroseconds(u32),
+    IOError, InvalidKeyCharset, InvalidKeyLength(usize),
+    KrbErrorResponse(KrbError), NameResolutionError(String),
+    NetworkError, NoKeyProvided, NoProvidedSupportedCipherAlgorithm,
+    NotAvailableData(String), ParseAsRepError(AsRep, Box<Error>),
+    PrincipalNameTypeUndefined(String), NoPrincipalName,
+    NoAddress, BinaryParseError,
+}
+// Trait impls: From<kerberos_crypto::Error>, From<AsciiError>, From<Utf8Error>,
+//              From<kerberos_asn1::Error>, From<kerberos_ccache::Error>
+```
+
+---
+
+#### requesters/as_requester.rs — AS-REQ 请求器（最底层）
+
+```rust
+pub enum AsReqResponse { KrbError(KrbError), AsRep(AsRep) }
+
+pub struct AsRequester;   // 私有字段
+impl AsRequester {
+    pub fn new(realm: AsciiString, kdc_address: IpAddr) -> Self;
+    pub fn request(&self, username: &AsciiString, user_key: Option<&Key>) -> Result<AsReqResponse>;
+    pub fn etypes(&self) -> &HashSet<i32>;
+    pub fn set_etype(&mut self, etype: i32) -> Result<()>;
+    pub fn set_etypes(&mut self, etypes: HashSet<i32>) -> Result<()>;
+    pub fn kdc_options(&self) -> u32;
+    pub fn realm(&self) -> &AsciiString;
+    pub fn set_transport_protocol(&mut self, transport_protocol: TransportProtocol);
+}
+```
+
+**内部流程**：`AsRequester::request()` → `AsRequest::request()` → 构建 AS-REQ → 发送到 KDC → 解析响应。
+
+---
+
+#### requesters/tgt_requester.rs — TGT 请求器（高层包装）
+
+```rust
+pub struct TgtRequester;   // 包裹 AsRequester
+impl TgtRequester {
+    pub fn new(realm: AsciiString, kdc_address: IpAddr) -> Self;
+    pub fn request(&self, username: &AsciiString, user_key: Option<&Key>) -> Result<Credential>;
+    pub fn etypes(&self) -> &HashSet<i32>;
+    pub fn set_etype(&mut self, etype: i32) -> Result<()>;
+    pub fn set_etypes(&mut self, etypes: HashSet<i32>) -> Result<()>;
+    pub fn kdc_options(&self) -> u32;
+    pub fn realm(&self) -> &AsciiString;
+    pub fn set_transport_protocol(&mut self, transport_protocol: TransportProtocol);
+}
+```
+
+**内部流程**（`TGTRequest::request()`）：
+1. 发送 AS-REQ → 若返回 KrbError（PREAUTH_REQUIRED），解析 e-data 获取 salt
+2. 获取 salt 后用密码构造加密时间戳 → 发送第二次 AS-REQ
+3. 从 AS-REP 中提取 Credential
+
+---
+
+#### requesters/tgs_requester.rs — TGS 服务票据请求器
+
+```rust
+pub enum TgsReqResponse { KrbError(KrbError), TgsRep(TgsRep) }
+
+pub struct TgsRequester;
+impl TgsRequester {
+    pub fn new(realm: AsciiString, kdc_address: IpAddr) -> Self;
+    pub fn set_transport_protocol(&mut self, transport_protocol: TransportProtocol);
+    /// 请求服务票据并返回 (Credential, 原始 TGS-REQ 字节)
+    pub fn request_with_raw(&self, tgt_credential: &Credential, service_principal: &AsciiString) -> Result<(Credential, Vec<u8>)>;
+    /// 请求服务票据，仅返回 Credential
+    pub fn request(&self, tgt_credential: &Credential, service_principal: &AsciiString) -> Result<Credential>;
+}
+```
+
+**内部流程**：
+1. `build_tgs_req()` → 解析 SPN（"/" 分割组件，"@" 剔除 realm）→ 构造 KDC-REQ-BODY（含 local address）→ `build_ap_req_for_tgs()` 构建 AP-REQ 作为 PA-TGS-REQ → 添加 PA-PAC-REQUEST → 发送 TGS-REQ
+2. `send_tgs_req()` → 发送到 KDC → `parse_tgs_response()` 解析 TGS-REP
+3. `extract_credential_from_tgs_rep()` → 用 TGT session key 解密 TGS-REP 的 enc-part → 构造服务票据 Credential
+
+**⚠ 注意**：`local_ip` 目前硬编码为 `10.110.149.18`，应改用 `utils::get_local_ip()`。
+
+---
+
+#### messages/ap_req.rs — AP-REQ 构建器
+
+```rust
+/// GSS checksum 提取数据
+pub struct GssChecksumData {
+    pub gss_initial_seq: u32,
+    pub subkey: Vec<u8>,
+    pub subkey_type: i32,
+}
+
+#[derive(Debug, Clone)]
+pub struct ApReqOptions {
+    pub mutual_required: bool,     // 默认 true
+    pub use_session_key: bool,     // 默认 false
+    pub gssapi_checksum: bool,     // 默认 true（兼容 Java JGSS）
+    pub time_offset_secs: i64,     // 默认 0（时钟偏移修正，正=客户端慢）
+}
+
+pub struct ApReqBuilder<'a>;       // 持有 &Credential
+impl ApReqBuilder<'a> {
+    pub fn new(credential: &'a Credential) -> Self;
+    pub fn with_options(mut self, options: ApReqOptions) -> Self;
+    /// 返回 DER 编码的 AP-REQ bytes
+    pub fn build(&self) -> Result<Vec<u8>>;
+    /// 返回 (AP-REQ bytes, GssChecksumData)
+    pub fn build_with_gss_data(&self) -> Result<(Vec<u8>, GssChecksumData)>;
+}
+```
+
+**内部流程**（`build_impl()`）：
+1. 生成随机 subkey（AES key）和初始序列号
+2. 构建 GSSAPI checksum（cksumtype=0x8003, GSS_C_AF_EXT 格式）
+3. 构建 Authenticator（含 subkey + seq_number）
+4. 用服务 ticket 的 session key 加密 Authenticator
+5. 组装 AP-REQ（ApReq { pvno, msg_type, ap_options, ticket, authenticator }）
+6. DER 编码输出
+
+---
+
+#### gss_engine.rs — GSS-API 消息保护引擎
+
+```rust
+pub struct KerberosGssEngine;  // 私有字段: session_key, aes_sizes, seq_num
+impl KerberosGssEngine {
+    pub fn new(session_key: Vec<u8>, key_type: i32) -> Self;
+    pub fn new_with_seq(session_key: Vec<u8>, key_type: i32, seq_num: u32) -> Self;
+    /// 指定 key_usage 的 WRAP（用于 accept 端，_ku_java 无特殊含义）
+    pub fn wrap_with_ku_java(&mut self, plaintext: &[u8], key_usage: i32) -> io::Result<Vec<u8>>;
+    /// 默认 initiator WRAP（key_usage=24），自动递增 seq_num
+    pub fn wrap(&mut self, plaintext: &[u8]) -> io::Result<Vec<u8>>;
+    /// 尝试 4 种 key_usage 解 WRAP/MIC token
+    pub fn unwrap(&mut self, token: &[u8]) -> io::Result<Vec<u8>>;
+    pub fn seq_num(&self) -> u32;
+    pub fn reset_seq_num(&mut self, seq: u32);
+}
+```
+
+**WRAP 令牌格式**（JDK V2, non-confidential）：
+```
+[16B header][payload][12B checksum]
+  header: TOK_ID(2) + Flags(1) + FILLER(1) + EC(2) + RRC(2) + SND_SEQ(8)
+  TOK_ID: 0x0504=WRAP, 0x0404=MIC
+```
+
+**关键逻辑**：
+- checksum = `checksum_sha_aes(key, key_usage, header_cleared + data, &aes_sizes)`
+- unwrap 顺序：key_usage 24（init_seal）→ 22（accep_seal）→ 25（init_sign）→ 23（accep_sign）
+
+---
+
+#### integration.rs — 全链路认证
+
+```rust
+#[derive(Debug, Clone)]
+pub struct KerberosAuthOptions {
+    pub realm: AsciiString,
+    pub kdc_address: IpAddr,
+    pub kdc_port: Option<u16>,           // 默认 Some(88)
+    pub username: AsciiString,
+    pub user_key: Key,
+    pub service_principal: AsciiString,
+    pub mutual_required: bool,           // 默认 true
+    pub time_offset_secs: i64,           // 默认 0
+}
+
+pub struct KerberosAuthenticator;   // 私有字段: options
+impl KerberosAuthenticator {
+    pub fn new(options: KerberosAuthOptions) -> Self;
+    /// 一站式认证：TGT → TGS → AP-REQ，返回 AP-REQ bytes
+    pub fn authenticate(&self) -> crate::Result<Vec<u8>>;
+    /// 返回 (AP-REQ bytes, 服务票证 Credential)
+    pub fn authenticate_full(&self) -> crate::Result<(Vec<u8>, Credential)>;
+    /// 返回 (AP-REQ bytes, Credential, GSS 初始序列号)
+    pub fn authenticate_full_with_seq(&self) -> crate::Result<(Vec<u8>, Credential, u32)>;
+    /// 返回 (AP-REQ bytes, Credential, GSS init seq, subkey_type, subkey, gss_flags)
+    /// subkey 和 subkey_type 用于初始化 KerberosGssEngine
+    pub fn authenticate_full_with_seq_and_subkey(&self)
+        -> crate::Result<(Vec<u8>, Credential, u32, u32, Vec<u8>, i32)>;
+}
+```
+
+**调用链**：`authenticate()` → `TgtRequester::request()` → `TgsRequester::request()` → `ApReqBuilder::build_with_gss_data()`
+
+---
+
+#### utils.rs — 工具函数
+
+```rust
+/// 获取本机非 loopback IPv4 地址
+pub fn get_local_ip() -> Option<IpAddr>;
+/// 通过 DNS SRV 查询 _kerberos._tcp.<REALM> 获取 KDC 地址
+pub fn resolve_realm_kdc(realm: &AsciiString) -> Result<IpAddr>;
+```
+
+#### credentials/credential.rs — 凭据数据结构
+
+```rust
+pub struct Credential;  // 私有字段: crealm, cname, ticket, client_part(EncAsRepPart)
+impl Credential {
+    pub fn new(crealm: Realm, cname: PrincipalName, ticket: Ticket, client_part: EncAsRepPart) -> Self;
+    pub fn crealm(&self) -> &Realm;
+    pub fn cname(&self) -> &PrincipalName;
+    pub fn ticket(&self) -> &Ticket;
+    pub fn authtime(&self) -> &KerberosTime;
+    pub fn starttime(&self) -> Option<&KerberosTime>;
+    pub fn endtime(&self) -> &KerberosTime;
+    pub fn renew_till(&self) -> Option<&KerberosTime>;
+    pub fn flags(&self) -> &TicketFlags;
+    pub fn key(&self) -> &EncryptionKey;       // ← session key（解密/加密用）
+    pub fn srealm(&self) -> &KerberosString;
+    pub fn sname(&self) -> &PrincipalName;
+    pub fn caddr(&self) -> Option<&HostAddresses>;
+    pub fn encrypted_pa_data(&self) -> Option<&MethodData>;
+    pub fn save_into_ccache_file(self, path: &str) -> Result<()>;
+    pub fn save_into_krb_cred_file(self, path: &str) -> Result<()>;
+}
+// Trait impls: TryFrom<kerberos_ccache::Credential>, From<Credential> for kerberos_ccache::Credential
+```
+
+#### credentials/credential_warehouse.rs — 凭据仓库
+
+```rust
+pub struct CredentialWarehouse {
+    pub credentials: Vec<Credential>,
+    pub realm: Realm,
+    pub client: PrincipalName,
+}
+impl CredentialWarehouse {
+    pub fn new(realm: Realm, client: PrincipalName, credentials: Vec<Credential>) -> Self;
+    pub fn save_into_ccache_file(&self, path: &str) -> error::Result<()>;
+    pub fn save_into_krb_cred_file(&self, path: &str) -> error::Result<()>;
+}
+// Trait impls: From<Credential>, TryFrom<CCache>, From<CredentialWarehouse> for CCache
+```
+
+---
+
+### kerberos-crypto（加密算法库）
+
+**crates/kerberos-crypto/src/lib.rs** — 核心加密逻辑
+
+```rust
+// 枚举
+pub enum Key { Secret(String), RC4Key([u8;16]), AES128Key([u8;16]), AES256Key([u8;32]) }
+pub enum AesSizes { Aes128, Aes256 }
+
+// Trait
+pub trait KerberosCipher {
+    fn encrypt(&self, key: &[u8], key_usage: i32, plaintext: &[u8]) -> Vec<u8>;
+    fn decrypt(&self, key: &[u8], key_usage: i32, ciphertext: &[u8]) -> Result<Vec<u8>>;
+    fn generate_key_from_string_and_encrypt(&self, password: &str, salt: &[u8], ku: i32, pt: &[u8]) -> Vec<u8>;
+    fn generate_key_from_string_and_decrypt(&self, password: &str, salt: &[u8], ku: i32, ct: &[u8]) -> Result<Vec<u8>>;
+}
+
+// 工厂函数
+pub fn new_kerberos_cipher(etype: i32) -> Result<Box<dyn KerberosCipher>>;
+// 支持的 etype: 18(AES256), 17(AES128), 23(RC4)
+
+// Checksum 函数（关键！GSS 引擎和 TGS 都调用）
+pub fn checksum_hmac_md5(key: &[u8], key_usage: i32, plaintext: &[u8]) -> Vec<u8>;
+pub fn checksum_sha_aes(key: &[u8], key_usage: i32, plaintext: &[u8], aes_sizes: &AesSizes) -> Vec<u8>;
+pub fn checksum_sha_aes_le(key: &[u8], key_usage: i32, plaintext: &[u8], aes_sizes: &AesSizes) -> Vec<u8>;
+//                   ^^ 注意: checksum_sha_aes_le 使用小端 key_usage，用于 Java JGSS 兼容
+
+// DK (derive key) 函数 — 内部使用
+pub fn dk(key: &[u8], key_usage: i32, aes_sizes: &AesSizes) -> Vec<u8>;
+
+// 辅助
+pub fn is_supported_etype(etype: i32) -> bool;
+pub fn supported_etypes() -> HashSet<i32>;
+```
+
+---
+
+### kerberos-constants（常量定义）
+
+**crates/kerberos-constants/src/**
+所有模块均为 `pub mod xxx`，只导出常量，无函数/类型：
+
+| 模块 | 关键常量 |
+|---|---|
+| `etypes` | `AES256_CTS_HMAC_SHA1_96=18`, `AES128_CTS_HMAC_SHA1_96=17`, `RC4_HMAC=23` |
+| `key_usages` | `KEY_USAGE_AS_REQ_PA_ENC_TIMESTAMP=1`, `KEY_USAGE_AP_REQ_AUTHEN=11`, `KEY_USAGE_TGS_REQ_PA_TGS_REQ=7`, 等 |
+| `ap_options` | `RESERVED=0x80000000`, `USE_SESSION_KEY=0x40000000`, `MUTUAL_REQUIRED=0x20000000` |
+| `ticket_flags` | `FORWARDABLE=0x40000000`, `RENEWABLE=0x04000000`, `INITIAL=0x00400000` 等 |
+| `kdc_options` | `FORWARDABLE=0x40000000`, `RENEWABLE_OK=0x00000010` 等 |
+| `pa_data_types` | `PA_TGS_REQ=1`, `PA_PAC_REQUEST=128` |
+| `principal_names` | `NT_PRINCIPAL=1`, `NT_SRV_INST=2` |
+| `error_codes` | `KDC_ERR_PREAUTH_REQUIRED=25` |
+| `checksum_types` | `HMAC_SHA1_96_AES_8003=0x8003` |
+
+---
+
+### kerberos-ccache（ccache 文件读/写，基于 nom）
+
+**crates/kerberos-ccache/src/lib.rs** — nom 解析器实现
+
+```rust
+// 核心数据结构
+pub struct CountedOctetString(pub Vec<u8>);   // 带 4B 长度前缀的字节串
+pub struct Principal { pub name_type: u32, pub realm: CountedOctetString, pub components: Vec<CountedOctetString> }
+pub struct KeyBlock { pub keytype: u16, pub etype: u16, pub keyvalue: Vec<u8> }
+pub struct Times { pub authtime: u32, pub starttime: u32, pub endtime: u32, pub renew_till: u32 }
+pub struct Address { pub addr_type: u16, pub addr_data: CountedOctetString }
+pub struct AuthData { pub ad_type: u16, pub ad_data: CountedOctetString }
+pub struct Credential { pub client, server, key, time, is_skey, tktflags, addrs, authdata, ticket, second_ticket }
+pub struct CCache { pub header: Header, pub primary_principal: Principal, pub credentials: Vec<Credential> }
+
+// 关键方法
+impl KeyBlock {
+    pub fn new(keytype: u16, keyvalue: Vec<u8>) -> Self;   // etype = keytype ← ADR-002 修复
+    pub fn new_with_etype(keytype: u16, etype: u16, keyvalue: Vec<u8>) -> Self;
+    pub fn build(&self) -> Vec<u8>;
+    pub fn parse(raw: &[u8]) -> IResult<&[u8], Self>;       // nom 解析器
+}
+```
+
+**注意**：此 crate 使用 `nom 7`，需要 `nom::Err` 和 `nom::IResult`。
+
+---
+
+### kerberos-keytab（keytab 文件解析）
+
+**crates/kerberos-keytab/src/lib.rs** — 支持 MIT keytab 格式
+
+```rust
+pub use counted_octet_string::CountedOctetString;
+pub use key_block::KeyBlock;
+pub use keytab_entry::KeytabEntry;
+pub use keytab::Keytab;
+```
+
+内部结构类似 ccache。
+
+---
+
+### mit-krb5-ccache（MIT krb5 FCC v4 写入）
+
+**crates/mit-krb5-ccache/src/lib.rs** — MIT 兼容的 ccache 序列化
+
+```rust
+pub struct Principal { pub name_type: u32, pub realm: String, pub components: Vec<String> }
+pub struct KeyBlock { pub enctype: u16, pub keyvalue: Vec<u8> }
+pub struct Times { pub authtime, starttime, endtime, renew_till: u32 }
+pub struct HostAddr { pub addr_type: u16, pub addr_data: Vec<u8> }
+pub struct AuthData { pub ad_type: u16, pub ad_data: Vec<u8> }
+pub struct Credential { pub client, server, key, time, is_skey, tktflags, addrs, authdata, ticket, second_ticket }
+pub struct CCache { pub default_principal: Principal, pub credentials: Vec<Credential> }
+
+impl CCache {
+    pub fn new(default_principal: Principal, credentials: Vec<Credential>) -> Self;
+    pub fn build(&self) -> Vec<u8>;           // 序列化为字节
+    pub fn parse(data: &[u8]) -> io::Result<(usize, Self)>;
+    pub fn write_to_file(&self, path: &str) -> io::Result<()>;
+    pub fn read_from_file(path: &str) -> io::Result<Self>;
+}
+```
+
+所有子结构均有 `build()` / `parse()` 方法。
+
+---
+
+### kinit-kt（命令行工具库）
+
+**crates/kinit-kt/src/lib.rs**
+
+```rust
+/// keytab → TGT 获取 → 写入 ccache 文件
+/// krb5_ini_path: 可选 krb5.ini 配置文件路径（用于 KDC 解析）
+pub fn request_tgt(keytab_path: &str, principal: &str, krb5_ini_path: Option<&str>) -> Result<Vec<u8>, String>;
+
+/// 返回 Credential 而非写入文件（编程接口）
+pub fn request_tgt_credential(keytab_path: &str, principal: &str, krb5_ini_path: Option<&str>)
+    -> Result<kerbeiros::credentials::Credential, String>;
+```
+
+**内部流程**（`request_tgt`）：
+1. `parse_principal(principal)` → 拆分 `user@REALM`
+2. 加载 keytab → `find_key_in_keytab()` → 匹配 principal_name + realm
+3. `resolve_kdc(realm, krb5_ini_path)` → 读取 krb5.ini / DNS SRV / 默认域名解析
+4. `TgtRequester::new(realm, kdc_address).request(&username, &key)` → `build_mit_ccache()` → 写入文件
+
+---
+
+### klist（ccache 查看工具）
+
+**crates/klist/src/main.rs** — 二进制入口
+
+```
+命令行参数：
+  klist                          → 显示默认 ccache
+  klist -c <path>                → 指定路径
+  klist -e                       → 显示 etype/keytype 详情
+  环境变量 KRB5CCNAME            → 覆盖默认路径（支持 FILE: 前缀）
+```
+
+内部函数（全部为私有）：
+- `resolve_ccache_path(args) -> Result<String, String>`
+- `fmt_time(ts: u32) -> String`
+- `fmt_etype(etype: u16, keytype_fallback: u16) -> String`
+- `fmt_principal(realm, components) -> String`
+- `fmt_flags(flags: u32) -> String`
+- `print_cred(cred, idx, show_etype_detail)`
+- `print_header(ccache, path)`
+- `run() -> Result<(), String>`
+
+---
+
+### 跨 crate 调用链速查
+
+```
+kinit-kt:
+  request_tgt() / request_tgt_credential()
+    → keytab 解析 (kerberos-keytab)
+    → TgtRequester::request() (kerbeiros)
+      → AsRequester::request()
+        → ASN.1 编码/解码 (kerberos-asn1 + red-asn1)
+        → 网络传输 (kerbeiros::transporter)
+        → 加密/解密 (kerberos-crypto)
+    → mit-krb5-ccache 写入 (mit-krb5-ccache)
+
+klist:
+  main() → mit-krb5-ccache::CCache::read_from_file() → 分行格式化输出
+
+编程接口 - 全链路:
+  KerberosAuthenticator::authenticate()
+    → TgtRequester::request()          (as above)
+    → TgsRequester::request()
+      → build_tgs_req()
+        → ApReqBuilder (for PA-TGS-REQ 内的 AP-REQ)
+        → send_tgs_req() → KDC → parse TGS-REP
+      → extract_credential_from_tgs_rep()
+    → ApReqBuilder::build_with_gss_data()
+      → 构建 Authenticator（含 GSSAPI checksum + subkey）
+      → 用 session key 加密 → 输出 DER 编码 AP-REQ
+
+GSS 消息保护:
+  KerberosGssEngine::wrap(plaintext)
+    → 构建 16B JDK V2 header
+    → checksum_sha_aes(key, key_usage, header_cleared + data, &aes_sizes)
+    → 输出 [header][data][checksum]
+
+  KerberosGssEngine::unwrap(token)
+    → 解析 header → 提取 key_usage(22..25) 循环尝试
+    → checksum_sha_aes 校验 → 通过则返回 payload
+```
+
+---
+
 ## 关键设计决策记录（ADR）
 
 ### ADR-001: Fork himmelblau_* crates 并独立维护
@@ -383,6 +867,7 @@ Wire format (non-conf WRAP):
   - 新增工具函数（get_local_ip, resolve_realm_kdc）
   - 重构 GSS 引擎适配 JDK V2 格式，移除调试日志
   - 清理冗余调试打印日志
+  - 新增代码地图（Code Map）章节，按 crate 列出所有公共 API 签名、关键函数、内部流程及跨 crate 调用链
 
 ---
 
