@@ -386,7 +386,9 @@ mod test {
         // Create a minimal fake TGT credential
         let ticket = Ticket::new(
             "TEST.COM".to_string(),
-            PrincipalName::new(NT_SRV_INST, "krbtgt".into()),
+            PrincipalName::new(
+                kerberos_constants::principal_names::NT_PRINCIPAL,
+                "krbtgt".into()),
             EncryptedData::new(
                 kerberos_constants::etypes::AES256_CTS_HMAC_SHA1_96,
                 None,
