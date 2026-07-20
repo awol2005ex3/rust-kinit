@@ -47,10 +47,23 @@ impl<'a> AsReqBuilder<'a> {
 
     fn create_as_req_struct(&self) -> Result<AsReq> {
         let mut as_req = AsReq::default();
-        as_req.req_body.cname = Some(PrincipalName::new(
-            NT_PRINCIPAL,
-            self.username.clone().into(),
-        ));
+
+        // Support multi-component client principal names (e.g. "kudu/bd-pr-nn1").
+        // This is essential for keytab principals that include an instance name.
+        let username_str = self.username.as_str();
+        let components: Vec<&str> = username_str.split('/').collect();
+        if components.len() > 1 {
+            let mut cname = PrincipalName::new(NT_SRV_INST, KerberosString::from(components[0]));
+            for comp in &components[1..] {
+                cname.push(KerberosString::from(*comp));
+            }
+            as_req.req_body.cname = Some(cname);
+        } else {
+            as_req.req_body.cname = Some(PrincipalName::new(
+                NT_PRINCIPAL,
+                self.username.clone().into(),
+            ));
+        }
         as_req.req_body.realm = self.options.realm().clone().into();
         as_req.req_body.kdc_options = self.options.kdc_options().into();
 
