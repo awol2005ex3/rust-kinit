@@ -33,6 +33,15 @@ pub struct ApReqOptions {
     /// Whether to include a GSSAPI checksum (cksumtype=0x8003) in the Authenticator.
     /// Some Java GSSAPI implementations are strict about this.
     pub gssapi_checksum: bool,
+    /// Whether to request GSS integrity protection (GSS_C_INTEG_FLAG).
+    /// Required by SASL GSSAPI (RFC 4752); default true for Java/Kudu compatibility.
+    pub gss_integrity: bool,
+    /// Whether to embed the initial sequence number inside the GSS checksum.
+    /// MIT krb5 includes it when the authenticator seq-number is non-zero, but
+    /// Java JGSS's OverloadedChecksum only parses the first 24 bytes and ignores
+    /// any trailing seq-number. Default false to produce the 24-byte checksum
+    /// expected by OpenJDK/Heimdal acceptors.
+    pub checksum_seq: bool,
     /// Time offset in seconds to add to Utc::now() for the authenticator's ctime.
     /// Use this to correct for clock skew between client and KDC/server.
     /// Positive = client clock behind server, negative = client ahead.
@@ -45,6 +54,8 @@ impl Default for ApReqOptions {
             mutual_required: true,
             use_session_key: false,
             gssapi_checksum: true,
+            gss_integrity: true,
+            checksum_seq: false,
             time_offset_secs: 0,
         }
     }
@@ -123,24 +134,32 @@ impl<'a> ApReqBuilder<'a> {
         let subkey_bytes: Vec<u8> = (0..subkey_len).map(|_| rand::random::<u8>()).collect();
         // subkey generated
         let gssapi_checksum: Option<kerberos_asn1::Checksum> = if self.options.gssapi_checksum {
-            // MIT krb5 make_gss_checksum() for GSS_C_NO_CHANNEL_BINDINGS (null):
-            // Format (RFC 4121 §4.1.1.1, MIT krb5 src/lib/gssapi/krb5/make_checksum.c):
-            //   [0x10, 0x00, 0x00, 0x00]  ← GSS_C_AF_EXT (address family extension)
-            //                              / NOT a length field! Indicates no channel bindings
-            //   [16 bytes zeros]            ← channel binding hash (GSS_C_NO_CHANNEL_BINDINGS)
-            //   [gss_flags (4B LE)]         ← e.g. 0x0E = MUTUAL|REPLAY|SEQUENCE
-            //   [seq_number (4B LE)]
-            // Total: 28 bytes.
-            // CRITICAL: OpenJDK OverloadedChecksum checks:
-            //   checksumBytes[0..3] == {0x10, 0x00, 0x00, 0x00}
-            //   If first byte is 0x00, OpenJDK throws "Incorrect checksum"!
+            // GSS_C_NO_CHANNEL_BINDINGS checksum per RFC 4121 §4.1.1.1:
+            //   [0x10, 0x00, 0x00, 0x00]  ← GSS_C_AF_EXT (no channel bindings)
+            //   [16 bytes zeros]            ← channel binding hash placeholder
+            //   [gss_flags (4B LE)]         ← MUTUAL|REPLAY|SEQUENCE|INTEG
+            //   [seq_number (4B LE)]        ← only if checksum_seq=true (MIT krb5 style)
+            //
+            // Java JGSS OverloadedChecksum parses exactly 24 bytes and ignores any
+            // trailing seq-number, so we keep checksum_seq=false by default for
+            // OpenJDK/Heimdal acceptors.
+            // CRITICAL: OpenJDK rejects checksums whose first byte is not 0x10.
             let mut v = Vec::with_capacity(28);
             v.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]);   // GSS_C_AF_EXT
             v.extend_from_slice(&[0u8; 16]);                    // 16B zeros (no channel bindings)
-            let gss_flags: u32 = if self.options.mutual_required { 0x0000000E } else { 0x0000000C };
-            v.extend_from_slice(&gss_flags.to_le_bytes());      // flags (LE)
-            // seq_number set
-            v.extend_from_slice(&gss_seq.to_le_bytes());         // seq_number (LE)
+            let mut gss_flags: u32 = 0;
+            if self.options.mutual_required {
+                gss_flags |= 0x02; // GSS_C_MUTUAL_FLAG
+            }
+            gss_flags |= 0x04;       // GSS_C_REPLAY_FLAG
+            gss_flags |= 0x08;       // GSS_C_SEQUENCE_FLAG
+            if self.options.gss_integrity {
+                gss_flags |= 0x20;   // GSS_C_INTEG_FLAG (required by SASL GSSAPI)
+            }
+            v.extend_from_slice(&gss_flags.to_le_bytes());       // flags (LE)
+            if self.options.checksum_seq {
+                v.extend_from_slice(&gss_seq.to_le_bytes());     // seq_number (LE)
+            }
             Some(kerberos_asn1::Checksum {
                 cksumtype: 0x8003,
                 checksum: v,

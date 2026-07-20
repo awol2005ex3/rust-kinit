@@ -129,6 +129,7 @@ impl KerberosAuthenticator {
             use_session_key: false,
             gssapi_checksum: true,
             time_offset_secs: self.options.time_offset_secs,
+            ..Default::default()
         };
         let ap_req_builder = ApReqBuilder::new(&service_credential)
             .with_options(ap_req_options);
@@ -175,6 +176,7 @@ impl KerberosAuthenticator {
             use_session_key: false,
             gssapi_checksum: true,
             time_offset_secs: self.options.time_offset_secs,
+            ..Default::default()
         };
         let ap_req_builder = ApReqBuilder::new(&service_credential)
             .with_options(ap_req_options);
@@ -209,6 +211,7 @@ impl KerberosAuthenticator {
             use_session_key: false,
             gssapi_checksum: true,
             time_offset_secs: self.options.time_offset_secs,
+            ..Default::default()
         };
         let ap_req_builder = ApReqBuilder::new(&service_credential)
             .with_options(ap_req_options);
